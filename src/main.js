@@ -1,11 +1,22 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
-const scene = new THREE.Scene();
-// Đặt background trùng màu nền ngoài cho hoà hợp
-scene.background = new THREE.Color("#f6efe6");
+let scene; // Định nghĩa scene ở phạm vi ngoài để có thể cập nhật background
+let ambientLight, dirLight;
 
-// Camera góc nhìn tự nhiên
+function updateSceneBackground() {
+  if (!scene) return;
+  if (document.body.classList.contains("dark-mode")) {
+    // scene.background = new THREE.Color("#181a20");
+    if (ambientLight) ambientLight.intensity = 1.1;
+    if (dirLight) dirLight.intensity = 1.3;
+  } else {
+    // scene.background = new THREE.Color("#f6efe6");
+    if (ambientLight) ambientLight.intensity = 0.7;
+    if (dirLight) dirLight.intensity = 1.0;
+  }
+}
+
 const camera = new THREE.PerspectiveCamera(65, 1, 0.1, 100);
 camera.position.set(0, 2, 6);
 
@@ -15,10 +26,15 @@ renderer.setSize(canvasDiv.clientWidth, canvasDiv.clientHeight);
 canvasDiv.appendChild(renderer.domElement);
 
 // Ánh sáng
-scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-const light = new THREE.DirectionalLight(0xffffff, 1);
-// light.position.set(5, 10, 7.5);
-scene.add(light);
+scene = new THREE.Scene();
+updateSceneBackground();
+
+// Ánh sáng
+ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+dirLight.position.set(5, 10, 7.5);
+scene.add(ambientLight);
+scene.add(dirLight);
 
 // Load model
 let model;
@@ -52,12 +68,13 @@ loader.load("/medieval_fantasy_book/scene.gltf", (gltf) => {
   // Lấy aspect thực tế của canvas
   const w = canvasDiv.clientWidth,
     h = canvasDiv.clientHeight;
+
   const aspect = w / h;
   camera.aspect = aspect;
   camera.updateProjectionMatrix();
   // Camera setup
   const maxHorizontal = Math.max(size.x, size.z);
-  const margin = 1.8;
+  const margin = 1.3; // margin hợp lý
   const fov = camera.fov * (Math.PI / 180);
   // Tính khoảng cách camera mặc định để vừa khung ngang
   targetCameraZ = (maxHorizontal * margin) / (2 * Math.tan(fov / 2)) / aspect;
@@ -66,6 +83,8 @@ loader.load("/medieval_fantasy_book/scene.gltf", (gltf) => {
   camera.position.set(0, size.y * 0.18, targetCameraZ);
   camera.lookAt(0, 0, 0);
   model.scale.set(1, 1, 1);
+
+  // model.scale.set(0.9, 0.9, 0.9);
   scene.add(model);
   animate();
 });
@@ -110,8 +129,8 @@ renderer.domElement.addEventListener(
     if (!(e.ctrlKey || e.metaKey)) return;
     e.preventDefault();
     // Zoom bằng cách di chuyển camera dọc trục Z
-    targetCameraZ += e.deltaY * 0.02;
-    targetCameraZ = Math.max(minCameraZ, Math.min(maxCameraZ, targetCameraZ));
+    targetCameraZ += e.deltaY * 0.2;
+    // targetCameraZ = Math.max(minCameraZ, Math.min(maxCameraZ, targetCameraZ));
   },
   { passive: false }
 );
@@ -125,6 +144,35 @@ window.addEventListener("resize", () => {
   camera.updateProjectionMatrix();
 });
 
+// Trong animate, sau khi xoay model, kiểm tra nếu model bị cắt thì tự động lùi camera ra xa hơn
+function isBoxMostlyInView(box, camera) {
+  const points = [
+    new THREE.Vector3(box.min.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.min.x, box.max.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.min.y, box.max.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.min.z),
+    new THREE.Vector3(box.max.x, box.max.y, box.max.z),
+  ];
+  let inCount = 0;
+  for (const p of points) {
+    const projected = p.clone().project(camera);
+    if (
+      projected.x >= -1 &&
+      projected.x <= 1 &&
+      projected.y >= -1 &&
+      projected.y <= 1 &&
+      projected.z >= -1 &&
+      projected.z <= 1
+    ) {
+      inCount++;
+    }
+  }
+  return inCount >= 5;
+}
+
 function animate() {
   requestAnimationFrame(animate);
   if (model) {
@@ -137,7 +185,52 @@ function animate() {
     model.rotation.y = currentRotation.y;
     // Zoom mượt bằng camera
     camera.position.z += (targetCameraZ - camera.position.z) * 0.15;
+    if (camera.position.z < minCameraZ) camera.position.z = minCameraZ;
+    if (camera.position.z > maxCameraZ) camera.position.z = maxCameraZ;
     camera.lookAt(0, 0, 0);
+    // Auto-fit: nếu model bị cắt thì tự động lùi camera ra xa hơn
+    const box = new THREE.Box3().setFromObject(model);
+    let safeCount = 0,
+      maxSafe = 20;
+    while (
+      !isBoxMostlyInView(box, camera) &&
+      camera.position.z < maxCameraZ &&
+      safeCount < maxSafe
+    ) {
+      camera.position.z += 0.2;
+      safeCount++;
+    }
   }
   renderer.render(scene, camera);
 }
+
+// Dark mode toggle
+function setDarkMode(on) {
+  if (on) {
+    document.body.classList.add("dark-mode");
+    localStorage.setItem("dark-mode", "1");
+    const btn = document.querySelector(".mode-toggle");
+    if (btn) btn.textContent = "☀️";
+  } else {
+    document.body.classList.remove("dark-mode");
+    localStorage.setItem("dark-mode", "0");
+    const btn = document.querySelector(".mode-toggle");
+    if (btn) btn.textContent = "🌙";
+  }
+  updateSceneBackground();
+}
+// Load trạng thái dark mode khi vào trang
+if (localStorage.getItem("dark-mode") === "1") {
+  setDarkMode(true);
+} else {
+  setDarkMode(false);
+}
+// Gắn sự kiện cho nút
+setTimeout(() => {
+  const btn = document.querySelector(".mode-toggle");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      setDarkMode(!document.body.classList.contains("dark-mode"));
+    });
+  }
+}, 200);
